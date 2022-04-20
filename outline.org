@@ -1,0 +1,636 @@
+# Created 2022-04-08 Fri 11:37
+#+TITLE: Setting up Backups
+#+AUTHOR: Jérôme Dockès
+#+language: en
+
+#+latex_header: \usepackage{DejaVuSansMono}
+#+latex_header: \usepackage[margin=1cm]{geometry}
+
+
+#+macro: borg *Borg*
+#+macro: restic *Restic*
+#+macro: gpg *gpg*
+
+#+macro: borgl [[https://borgbackup.readthedocs.io/en/stable/][Borg]]
+#+macro: resticl [[https://restic.net/][Restic]]
+#+macro: gpgl [[https://gnupg.org/][GnuPG]]
+
+
+
+* Introduction: *Restic* & *Borg*
+How to set up automated backups with [[https://borgbackup.readthedocs.io/en/stable/][Borg]] or [[https://restic.net/][Restic]].
+
+See slides
+
+*Borg* and *Restic* are open-source tools for creating backups.
+They offer similar features and have a similar interface.
+In this demo we use *Restic* because *Borg* works best when connecting via =ssh= to a server where *Borg* is installed, which is not always possible.
+*Restic* can use =sftp= as well as other protocols (e.g. to backup on a variety of cloud storage providers).
+
+However, *Borg* has its advantages as well -- for example it supports compression and *Restic* does not.
+As they are similar and easy to set up, we can easily use both to create backups on different media!
+This way backups are more robust to bugs or configuration mistakes.
+
+* Creating backups with *Restic*
+We create a *repository*, which contains *snapshots* of our files.
+(*Borg* says "*archives*" instead of "*snapshots*").
+We add new snapshots periodically.
+Old snapshots can be removed (according to a sensible strategy) to keep the repository size under control.
+
+*Restic* (or *Borg*) gives us:
+- Deduplication :: files are chunked and duplicate chunks are only copied and stored once, even if they have moved.
+- Encryption :: no one can read the snapshots or add new ones without a passphrase.
+- Easy browsing of snapshots & restoring :: the repository can be mounted as a filesystem. We can also extract a full snapshot with one command.
+- and more ... :: 
+** Install
+#+begin_src bash
+  sudo apt install restic
+#+end_src
+Or see the [[https://restic.readthedocs.io/en/stable/020_installation.html][Installation page]].
+** Create repository
+Imagine we want to do our backups on an external drive mounted on =/mnt/usb_drive=.
+#+begin_src bash
+  restic -r /mnt/usb_drive/backups/restic_repo init
+#+end_src
+*Restic* asks for the passphrase (keep it somewhere!) and initializes an empty repository.
+#+begin_src bash
+  ls /mnt/usb_drive/backups/restic_repo
+#+end_src
+** Create a snapshot
+Now we will add a snapshot (a backup, a copy of all the files as they are now) of our home directory to the repository.
+#+begin_src bash
+  restic -r /mnt/usb_drive/backups/restic_repo backup $HOME
+#+end_src
+** Create a backup script; add snapshots; list snapshots in a repository
+Typing the repository and passphrase every time is annoying (and won't be possible for automated backups) so we'll put them in environment variables.
+
+*Note about storing the passphrase:* here for the first part of this demo we are storing the passphrase in plaintext (clear) in the backup script!
+If we do not want that, in a later section we will see how to store it in a separate, encrypted file that we decrypt with [[https://gnupg.org/][GnuPG]] when performing the backup.
+In the meanwhile we set the permissions of the script so that only the current user (and =root=!) can read it.
+That means if someone can read the password, they can probably read the files we are backing up.
+Therefore, if the restic repository doesn't contain backups from other users or machines it may not make a big difference for them to get access to the backups.
+
+Edit =~/backup.sh=:
+#+begin_src sh
+  #!/bin/sh
+
+  export RESTIC_REPOSITORY='/mnt/usb_drive/backups/restic_repo'
+  export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
+#+end_src
+Now we set the permissions so only this user (and =root=) can read, write and execute this script:
+#+begin_src bash
+  chmod 700 ./backup.sh
+#+end_src
+
+We then source the script so that these variables become available in our shell's environment.
+We can create a few more snapshots.
+=--exclude= allows us to exclude some paths from the snapshot; we can have fine-grained control of what gets backed up as described [[https://restic.readthedocs.io/en/stable/040_backup.html#excluding-files][here]].
+We can use =--tag= to associate as many tags as we want to each snapshot.
+=restic snapshots= lists the snapshots in a repository.
+We can filter or group them according to the host, tags etc.
+
+#+begin_src bash
+  . ./backup.sh
+  restic backup $HOME
+  restic backup --exclude .cache $HOME
+  restic snapshots
+  restic backup --exclude .cache --tag coffee $HOME
+  restic snapshots
+#+end_src
+
+We can add the snapshot creation to =~/backup.sh=:
+#+begin_src sh
+  #!/bin/sh
+
+  export RESTIC_REPOSITORY='/mnt/usb_drive/backups/restic_repo'
+  export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
+
+  restic backup --verbose --exclude .cache $HOME
+#+end_src
+We can try it with
+#+begin_src bash
+  ./backup.sh
+#+end_src
+** Inspecting & restoring backups
+We can list the snapshots in a repository with
+#+begin_src bash
+  restic snapshots
+#+end_src
+and check it isn't broken with
+#+begin_src bash
+  restic check
+#+end_src
+and more thoroughly (but more slowly) with
+#+begin_src bash
+  restic check --read-data
+#+end_src
+
+Now we want to explore and extract the actual contents of the repository, to check that our backups contain everything we want or to recover our files after a problem happened.
+
+*** Mount repository as a filesystem
+We can mount a repository as a [[https://en.wikipedia.org/wiki/Filesystem_in_Userspace][FUSE]] filesystem, so we can explore the different snapshots as easily as if they were directories on our filesystem.
+
+We first create an empty directory that will be the mount point.
+#+begin_src bash
+  mkdir /tmp/restic_mount
+#+end_src
+Then we mount the repository; the =snapshots= directory contains all the backups and =latest= is a symlink to the latest one.
+#+begin_src bash
+  restic mount /tmp/restic_mount
+  ls /tmp/restic_mount/snapshots/latest
+#+end_src
+We can unmount the repository with =Ctrl+c= or =umount=
+
+*Borg* provides the same feature and also allows mounting a single snapshot (archive) instead of the whole repository, which can be faster.
+
+*** Restore a snapshot
+We can recover our data by copying some files or directory after using =restic mount=.
+Another option is to extract a whole snapshot into a directory on our filesystem (if we haven't already we should unmount the repository first otherwise it is locked):
+#+begin_src bash
+  mkdir /tmp/restic_restore
+  restic restore latest --target /tmp/restic_restore
+  ls /tmp/restic_restore
+#+end_src
+Instead of "latest" we can use the ID of any of the snapshots.
+** Removing backups
+Old backups become less useful to us after a while.
+We can remove them from the repository.
+#+begin_src bash
+  restic snapshots
+  restic forget --keep-last 2 --dry-run
+  restic forget --keep-last 2
+  restic snapshots
+#+end_src
+=forget= by itself only removes the snapshots, but does not free space because the chunks of data referenced by these snapshots are still in the repository.
+Add =--prune= to remove unused chunks.
+
+We can remove individual snapshots by giving their IDs, or remove several snapshots according to a policy.
+We may want to sample recent versions more densely, for example keep one backup a day for the past week, then one backup a week for the past month, then one a month for the past 6 months.
+See more details [[https://restic.readthedocs.io/en/latest/060_forget.html][here]].
+
+Edit =~/backup.sh=:
+#+begin_src sh
+  #!/bin/sh
+
+  export RESTIC_REPOSITORY='/mnt/usb_drive/backups/restic_repo'
+  export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
+
+  restic backup --exclude .cache $HOME
+
+  echo
+
+  restic forget                       \
+      --verbose                       \
+      --prune                         \
+      --keep-last     5               \
+      --keep-daily    7               \
+      --keep-weekly   4               \
+      --keep-monthly  6               \
+#+end_src
+Try it:
+#+begin_src bash
+  ./backup.sh
+#+end_src
+* Remote repositories
+*Restic* allows us to create and use repositories on remote hosts.
+It supports a wide variety of protocols so we can do our backups on any machine we can connect to with SSH, but also [[https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html][many cloud storage providers]].
+
+*Borg* only directly supports SSH, and works faster when *Borg* itself can be installed on the remote host (as well as our local machine).
+However when it isn't installed on the server, we can still easily use it by mounting the remote filesystem with =sshfs=.
+
+Mounting the remote host's filesystem with =sshfs= can also be useful to do backups in "pull" mode, whether with *Restic* or *Borg* -- that is when the machine that contains the backups repository opens the connection to the machine that contains the original files, rather than the other way around.
+For example if we want to back up files we created in our home directory on the server we can mount it and then back it up to a local repository.
+** Setting up SSH
+You probably have SSH set up so that you can connect for example to GitHub, Compute Canada (beluga, narval) or the BIC resources (ducky) so we will not give details here.
+
+But in a nutshell it would look like this.
+*** Install SSH client
+It is probably already installed.
+If necessary:
+#+begin_src bash
+  sudo apt install openssh-client
+#+end_src
+*** Generate a pair of keys
+#+begin_src bash
+  ssh-keygen
+#+end_src
+Choose a passphrase, keep it somewhere.
+*** Configure ssh for the backups host
+Edit =$HOME/.ssh/config=
+#+begin_example
+  host backupshost
+  hostname 192.168.1.40
+  user jerome
+  port 2222
+  IdentityFile ~/.ssh/id_rsa
+#+end_example
+
+Here =192.168.1.40= is the address of the host we use just for the demo, another example could be =narval.computecanada.ca=.
+=~/.ssh/id_rsa= is the SSH key we just created.
+If we do not specify the port the default (22) is used; 22 is the one used by computecanada and the BIC.
+
+*** Copy the key to the server where we want to store the repository
+Our SSH public key needs to be copied to =~/.ssh/authorized_keys= on the server.
+How this is done will depend on how it is managed, for example we may need to send our public key by email to the administrators -- the administrators of the server will provide instructions.
+If they have allowed password access, which is the case for Compute Canada, we can copy it ourselves.
+For example if the server is called =backupshost=, our key is =id_rsa.pub= (it will always end with =.pub=) and our user is =jerome= we run (from the local machine):
+#+begin_src bash
+  ssh-copy-id $HOME/.ssh/id_rsa.pub jerome@backupshost
+#+end_src
+
+Or we can connect to the server and manually edit =~/.ssh/authorized_keys= to copy the content of =~/.ssh/id_rsa.pub= in it (on a separate line).
+
+If using *Borg*, we can create a key pair that we use only for this backup and restric its use with the =command= option, to allow only running borg, and only for a specific repository -- see details  [[https://borgbackup.readthedocs.io/en/stable/deployment/hosting-repositories.html][here]] and [[https://borgbackup.readthedocs.io/en/stable/quickstart.html#remote-repositories][here]].
+For example =authorized_keys= might contain a line like (abbreviated for readability):
+#+begin_example
+  command="borg serve --restrict-to-path backups/borg_repo",restrict ssh-rsa AAAAB3NzaC1yc[...]
+#+end_example
+Where =AAAAB3NzaC1yc[...]= is the beginning of the public key.
+If we do this, all this key pair can do is use *Borg* on this host, so encrypting the private key (setting a passphrase on the key) becomes less important.
+That can be an alternative to using an SSH agent to access the key as explained below.
+
+*** Check that we can connect
+#+begin_src bash
+  ssh backupshost
+#+end_src
+(Then =Ctrl+D= or exit to close the connection.)
+This opens a shell on the host; if we restricted the key to use *Borg* it won't be allowed.
+** SSH agent
+Unless we have set an empty passphrase for our SSH (private) key, we need to provide the passphrase whenever we want to use it to connect to a remote machine.
+This is impractical, and would prevent us from having automated backups (when they run we aren't there to type the passphrase).
+Luckily there is a program called [[https://linux.die.net/man/1/ssh-agent][=ssh-agent=]] (installed with OpenSSH) that we can use to start a process that will remember our passphrase for the duration of our session, so we only have to type it once.
+
+Background processes such as our automated backups can connect to the SSH agent so they are able to use the SSH key.
+To do so, they need the PID of the SSH agent process and the socket it uses.
+One easy way to make sure it can be found by the =cron= job that will execute our backups is to use =keychain=.
+It simply starts the agent, adds the keys we want, and writes the PID and socket in a file that we can later source in our scripts.
+*** Install & use keychain
+#+begin_src bash
+  sudo apt install keychain
+#+end_src
+In =$HOME/kch.sh= (here the ssh key is =id_rsa=)
+#+begin_src bash
+  keychain --agents "ssh" --clear --inherit "local-once" --nogui id_rsa
+#+end_src
+We make that script executable and run it.
+It stores the necessary information in =~/.keychain=
+#+begin_src bash
+  chmod u+x ./kch.sh
+  ./kch.sh
+#+end_src
+If we are curious to look at the file created by =keychain=:
+#+begin_src bash
+  ls .keychain
+  cat "./.keychain/$(hostname)-sh"
+#+end_src
+Now make these environment variables available in our shell:
+#+begin_src bash
+  . "./.keychain/$(hostname)-sh"
+#+end_src
+Try it:
+#+begin_src bash
+  ssh backupshost
+#+end_src
+
+We will need to run =kch.sh= every time we start our machine.
+** Update repo location
+Now that we have SSH set up, for *Restic* to work with a remote host we have almost nothing to do.
+We just need to add the used protocol (=sftp:user@host:=) to the *Restic* repository path.
+
+It might be a good idea to have both a backup repository on the remote machine and one on an external hard drive; here we just remove the one we created before and
+set up the remote one instead.
+#+begin_src bash
+  rm -rf /mnt/usb_drive/backups/restic_repo
+#+end_src
+Edit =$HOME/backup.sh=
+#+begin_src sh
+  #!/bin/sh
+
+  . "$HOME/.keychain/$(hostname)-sh"
+  export RESTIC_REPOSITORY='sftp:jerome@backupshost:backups/restic_repo'
+  export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
+
+  restic backup --exclude .cache $HOME
+
+  echo
+
+  restic forget                       \
+      --verbose                       \
+      --prune                         \
+      --keep-last     5               \
+      --keep-daily    7               \
+      --keep-weekly   4               \
+      --keep-monthly  6               \
+#+end_src
+
+We create the new repository:
+
+#+begin_src bash
+  export RESTIC_REPOSITORY='sftp:jerome@backupshost:backups/restic_repo'
+  restic init
+#+end_src
+And check that we can create some snapshots
+#+begin_src bash
+  ./backup.sh
+  ./backup.sh
+  restic snapshots
+  restic check
+#+end_src
+* Automating backups
+Now we want to schedule the backups to run automatically.
+For scheduling them we use =cron=:
+#+begin_src bash
+  crontab -e
+#+end_src
+add entry:
+#+begin_example
+  ,*/2 * * * * $HOME/backup.sh > $HOME/backup.log 2>&1
+#+end_example
+This will run a backup every 2 minutes! So we can check it works without waiting too long.
+
+More realistic timing (every 2 hours):
+#+begin_example
+  0 */2 * * * $HOME/backup.sh > $HOME/backup.log 2>&1
+#+end_example
+
+* Decrypting the repository passphrase with GPG
+If we want automated backups but do not want to store the repository passphrase in plaintext we need some process to keep it in memory and make it available to the =cron= job.
+There are many tools for managing secrets such as =gnome-keyring=; note that not all of them will be easy to use with =cron= because the =cron= job does not share our environment.
+One possible solution is store the passphrase in a file encrypted with [[https://gnupg.org/][GnuPG]].
+Conveniently, =keychain= can start the GPG agent for us, just as it does the SSH agent.
+** GPG
+*gpg* is a standard tool for encryption and digital signatures.
+We may already be using it for encryption and to sign Git commits and tags, software packages, emails etc.
+Here is a quick walkthrough of how to set it up.
+*** Install *gpg* and create a key
+if needed
+#+begin_src bash
+  sudo apt install gpg
+#+end_src
+
+It can be necessary to specify the pinentry program (eg if on a machine with no X):
+write in =~/.gnupg/gpg-agent.conf=:
+#+begin_example
+  pinentry-program /usr/bin/pinentry-tty
+#+end_example
+We may need to install it with
+#+begin_src bash
+  sudo apt install pinentry-tty
+#+end_src
+We can now generate a key:
+#+begin_src bash
+  gpg --gen-key
+#+end_src
+We edit =~/.gnupg/gpg.conf= to tell it to use the agent:
+#+begin_example
+  use-agent
+#+end_example
+
+And we set the agent timeout in =~/.gnupg/gpg-agent.conf= (in seconds):
+#+begin_example
+  default-cache-ttl 864000
+  max-cache-ttl 864000
+#+end_example
+*** Try it
+encrypt "hello":
+#+begin_src bash
+  echo "hello" | gpg -a -e -r jerome@backups
+#+end_src
+And decrypt it (=--pinentry-mode= only needed if getting "Invalid IPC response" error)
+#+begin_src bash
+  echo "hello" | gpg -a -e -r jerome@backups | gpg -d --pinentry-mode loopback
+#+end_src
+** start the GPG agent and load the key with our keychain script
+In =~/scripts/kch.sh=:
+#+begin_src bash
+  #!/bin/bash
+  keychain --agents "ssh,gpg" --clear --inherit "local-once" --nogui \
+   id_rsa 104DDD1D3FE30C9A4D5C26B2069C63C5831D73FE
+#+end_src
+Here "=104DDD1D3F[...]=" is the key fingerprint; you can use =gpg -k= to see the fingerprint of your own key.
+
+Run it
+#+begin_src bash
+  ./kch.sh
+  . "$HOME/.keychain/$(hostname)-sh"
+#+end_src
+
+** Create passphrase file
+Now we write our repo's passphrase in a file encrypted with our *gpg* key (type or paste the passphrase at the prompt):
+#+begin_src bash
+  echo -n 'passphrase: '; echo -E "$(read -s -r p; echo -E "$p")" | gpg -a -e -r jerome@backups --output restic_repo.asc
+  chmod 600 restic_repo.asc
+#+end_src
+We can check it worked by decrypting the file:
+#+begin_src bash
+  gpg --quiet -d ./restic_repo.asc
+#+end_src
+
+** Edit backups script
+Now instead of writing the passphrase in the backups script, we use the =RESTIC_PASSWORD_COMMAND= environment variable; and use *gpg* to decrypt the file we just created:
+=~/backup.sh=
+
+#+begin_src sh
+  #!/bin/sh
+
+  . "$HOME/.keychain/$(hostname)-sh"
+  . "$HOME/.keychain/$(hostname)-sh-gpg"
+  export RESTIC_REPOSITORY='sftp:jerome@backupshost:backups/restic_repo'
+  export RESTIC_PASSWORD_COMMAND="gpg --use-agent --quiet --batch -d $HOME/restic_repo.asc"
+
+  restic backup --exclude .cache $HOME
+
+  echo
+
+  restic forget                       \
+      --verbose                       \
+      --prune                         \
+      --keep-last     5               \
+      --keep-daily    7               \
+      --keep-weekly   4               \
+      --keep-monthly  6               \
+#+end_src
+* Conclusion
+
+*Important:* anything we need to access and decrypt the backups repository must be backed up separately!
+
+Without the passphrase, the backups repository is useless (that's the point of a passphrase).
+If the passphrase is backed up in the repository and we need it to open the repository,  🤔 ...
+So the passphrase must be backed up separately --we make copies of our password manager's database that we store in a couple of different places.
+If we made backups on a remote host, we also store the SSH private key and its passphrase in the password manager's database that is backed up separately (on something we have access to without it).
+Otherwise we may have a hard time getting access to the host (we will need to contact the admins).
+
+We should also think about files that are not on the machine we back up: google docs, photos and other files shared with us online, emails if we only use a web client, files on our phone...
+
+We should also remember to check from time to time that the backups are working properly: having a look at the log file, using =borg check= or =restic check= to check the repository is in a good state, =borg list= or =restic snapshots= to see the list of archives (snapshots), and mounting the repository and checking that some important files are still there.
+Adding a calendar reminder to do this can help.
+
+See slides
+
+* Using *Borg*
+
+We can easily adapt the above to use [[https://borgbackup.readthedocs.io/en/stable/][Borg]] instead of (or in addition to) [[https://restic.net/][Restic]]. We may want to do so to do one backup with *Borg* and one with *Restic*, to restric the use of an SSH keypair to running =borg serve=, to take advantage of *Borg*'s compression or other features *Restic* misses, to create clear (not encrypted repositories), because *Borg* tends to use less memory, ...
+
+Fortunately we have almost nothing to change.
+
+** Installation
+#+begin_src bash
+  sudo apt install borgbackup
+#+end_src
+Or see the [[https://borgbackup.readthedocs.io/en/stable/installation.html][installation instructions]].
+** Creating the repository
+If we can install *Borg* on the server (or ask the admins to do so):
+#+begin_src bash
+  borg init --encryption repokey jerome@backupshost:backups/borg_repo
+#+end_src
+
+We can also create an SSH key pair just for this and restric its use in the =authorized_keys=
+#+begin_example
+  command="borg serve --restrict-to-path backups/borg_repo",restrict ssh-rsa AAAAB3NzaC1yc[...]
+#+end_example
+Where =AAAAB3NzaC1yc[...]= is the beginning of the public key.
+
+If instead of an SSH server we were doing local backups (e.g. on a USB drive) we just omit the part before ':':
+#+begin_src bash
+  borg init --encryption repokey /mnt/usb_drive/backups/borg_repo
+#+end_src
+
+If *Borg* cannot be installed on the server we just need to mount the remote filesystem with =sshfs= and proceed as if we were doing local backups (in that case we cannot restrict the SSH key command to =borg=):
+
+If necessary install =sshfs=:
+#+begin_src bash
+  sudo apt install sshfs
+#+end_src
+
+Mount the filesystem and create the repository (create the mount point first):
+#+begin_src bash
+  sshfs jerome@backupshost:backups /mnt/backups
+
+  borg init --encryption repokey /mnt/backups/borg_repo
+#+end_src
+Unmount the remote filesystem:
+#+begin_src bash
+  fusermount -u /mnt/backups
+#+end_src
+
+** Backups script
+A more complete example is shown in the [[https://borgbackup.readthedocs.io/en/stable/quickstart.html#automating-backups][Borg documentation]].
+The SSH ang GPG agents (if used) are set up in the same way as explained above for *Restic*.
+So is the =crontab= entry.
+Only the backup commands change (slightly):
+
+*** If *Borg* is installed on the remote host
+#+begin_src sh
+  #!/bin/sh
+
+  # Only needed if backups are automated and if we use either SSH (with a passphrase-protected key) or GPG:
+  . "$HOME/.keychain/$(hostname)-sh"
+  . "$HOME/.keychain/$(hostname)-sh-gpg"
+
+  # Only if backups are automated and we encrypted the repository passphrase:
+  export BORG_PASSCOMMAND='gpg --use-agent --quiet --batch -d /home/jerome/.passwd/example_encrypted_borg_repo.asc'
+  # Otherwise we could also use
+  # export BORG_PASSPHRASE='af!?:!cv;)}">b(hmhwk7\nj4e3`<^2+'
+
+  export BORG_REPO=jerome@backupshost:backups/borg_repo
+
+  borg create -v --list --show-rc --stats '::{hostname}-{now}' /home
+
+  echo
+
+  borg prune                          \
+        --verbose                       \
+        --list                          \
+        --prefix '{hostname}-'          \
+        --show-rc                       \
+        --keep-last     2               \
+        --keep-daily    7               \
+        --keep-weekly   4               \
+        --keep-monthly  6               \
+#+end_src
+
+*** If *Borg* is not installed on the remote host
+#+begin_src sh
+  #!/bin/sh
+
+  # Only needed if backups are automated and if we use either SSH (with a passphrase-protected key) or GPG:
+  . "$HOME/.keychain/$(hostname)-sh"
+  . "$HOME/.keychain/$(hostname)-sh-gpg"
+
+  # Only if backups are automated and we encrypted the repository passphrase:
+  export BORG_PASSCOMMAND='gpg --use-agent --quiet --batch -d /home/jerome/.passwd/example_encrypted_borg_repo.asc'
+  # Otherwise we could also use
+  # export BORG_PASSPHRASE='af!?:!cv;)}">b(hmhwk7\nj4e3`<^2+'
+
+  sshfs jerome@backupshost:backups /mnt/backups
+  export BORG_REPO=/mnt/backups/borg_repo
+
+  borg create -v --list --show-rc --stats '::{hostname}-{now}' /home
+
+  echo
+
+  borg prune                          \
+        --verbose                       \
+        --list                          \
+        --prefix '{hostname}-'          \
+        --show-rc                       \
+        --keep-last     2               \
+        --keep-daily    7               \
+        --keep-weekly   4               \
+        --keep-monthly  6               \
+
+  fusermount -u /mnt/backups
+#+end_src
+** Checking & restoring backups
+Note: in the following if borg is not installed on the remote host, first mount the filesystem with for example
+#+begin_src bash
+  sshfs jerome@backupshost:backups /mnt/backups
+#+end_src
+And then use the local path to the repository, e.g. =/mnt/backups/borg_repo=:
+#+begin_src bash
+  borg list /mnt/backups/borg_repo
+#+end_src
+When finished use =fusermount -u /mnt/backups=
+
+
+List archives in a repository
+#+begin_src bash
+  borg list jerome@backupshost:backups/borg_repo
+#+end_src
+Checking the repository: =borg check= exits with non-zero status if there is a problem.
+
+Mounting the repository
+#+begin_src bash
+  borg mount jerome@backupshost:backups/borg_repo /tmp/borg_mount
+  ls /tmp/borg_mount
+  borg umount /tmp/borg_mount
+#+end_src
+Or mounting a single archive:
+#+begin_src bash
+  borg mount jerome@backupshost:backups/borg_repo::pi2-2022-04-06T17:02:29 /tmp/borg_mount
+  ls /tmp/borg_mount/home
+  borg umount /tmp/borg_mount
+#+end_src
+
+Extract a full archive to the current working directory (must be empty):
+#+begin_src bash
+  cd /tmp/borg_extract
+  borg extract jerome@backupshost:backups/borg_repo::pi2-2022-04-06T17:02:29
+  ls ./home
+  cd -
+#+end_src
+** Starting with version =1.2=: =borg compact=
+This applies to *Borg* more recent than =1.2= ([[https://github.com/borgbackup/borg/blob/1.2.0rc1/docs/changes.rst#version-120a2-and-earlier-2019-02-24][release notes]]), which as of [2022-04-06 Wed]  is not yet in the Ubuntu official packages (meaning that unless you add the Borg ppa, =sudo apt install borgbackup= will install version =1.1.15=).
+
+Just as =restic forget= (without the =--prune= option) removes snapshots but does not actually free disk space (only =restic forget --prune= or =restic prune= free space), =borg prune= removes archives but does not remove the chunks they reference and thus does not free space.
+To free disk space we need to run =borg compact=.
+We can add to the end of the backup script:
+#+begin_src sh
+  borg compact
+#+end_src
+
+Or run it ourselves
+
+#+begin_src bash
+  borg compact jerome@backupshost:backups/borg_repo
+#+end_src
