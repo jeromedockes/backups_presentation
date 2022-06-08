@@ -1,0 +1,11 @@
+host backupshost
+hostname 192.168.1.40
+user jerome
+port 2222
+IdentityFile ~/.ssh/id_rsa
+
+host borgbackupshost
+hostname 192.168.1.40
+user jerome
+port 2222
+IdentityFile ~/.ssh/borg_id_rsa
