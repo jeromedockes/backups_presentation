@@ -65,7 +65,7 @@ Now we will add a snapshot (a backup, a copy of all the files as they are now) o
 Typing the repository and passphrase every time is annoying (and won't be possible for automated backups) so we'll put them in environment variables.
 
 *Note about storing the passphrase:* here for the first part of this demo we are storing the passphrase in plaintext (clear) in the backup script!
-If we do not want that, in a later section we will see how to store it in a separate, encrypted file that we decrypt with [[https://gnupg.org/][GnuPG]] when performing the backup.
+If we do not want that, in [[Decrypting the repository passphrase with GPG][a later section]] we will see how to store it in a separate, encrypted file that we decrypt with [[https://gnupg.org/][GnuPG]] when performing the backup.
 In the meanwhile we set the permissions of the script so that only the current user (and =root=!) can read it.
 That means if someone can read the password, they can probably read the files we are backing up.
 Therefore, if the restic repository doesn't contain backups from other users or machines it may not make a big difference for them to get access to the backups.
@@ -336,6 +336,85 @@ And check that we can create some snapshots
   restic snapshots
   restic check
 #+end_src
+** Other example: Dropbox
+*Restic* also support a wide variety of cloud storage providers such as Dropbox, google drive etc. by relying on [[https://rclone.org/][*Rclone*]].
+Setting up such a repository is very easy.
+Here we show an example using [[https://www.dropbox.com/][Dropbox]] because it has a free plan.
+In practice you will probably need more than the 2GB offered in Dropbox's free plan and in that case there are cheaper options available; it is worth checking the [[https://rclone.org/#providers][list]] of over 40 providers (as of 2022) supported by *Rclone*.
+Remember, the backups are encrypted (on the client) so you don't have to trust the cloud storage provider.
+
+First we need to [[https://rclone.org/install/][install]] *Rclone*, for example on systems that use =apt=:
+#+begin_src bash
+apt install rclone
+#+end_src
+
+Then to configure our cloud storage we just need to run =rclone config=, and it will interactively guide us through creating a Dropbox access token and creating a *Rclone* configuration file.
+Other storage providers are handled in the same way.
+
+#+begin_src bash
+rclone config
+#+end_src
+
+Answer the questions it asks in the terminal as shown in the [[https://rclone.org/dropbox/][documentation]].
+This amounts to choosing
+- a name for the remote: here we chose =dropbox=, it could be anything
+- choosing the remote type: here we chose =dropbox= to use Dropbox, it could be any of the other options.
+
+For the other questions we answer "y" to keep the default choice.
+*Rclone* will open a browser tab so we can connect to Dropbox and enter our credentials to create the access token, which is then automatically stored in the *Rclone* config file (in =~/.config/rclone/rclone.conf= on Ubuntu).
+
+Once this is done, we can check it works by listing the files in our Dropbox account:
+#+begin_src bash
+rclone ls dropbox:
+#+end_src
+where =dropbox= is the /name/ we chose for the remote (note the =:=).
+
+Note that by default the *Rclone* configuration file is in clear text and it contains our Dropbox access token.
+When it creates it, *Rclone* sets permissions so only the current user can read and write it (=chmod 600=).
+If we additionally want it to be encrypted, we can use =rclone config= and then select "Set configuration password."
+We will then be prompted for the password whenever we use *Rclone* unless we use the =RCLONE_PASSSWORD_COMMAND= environment variable; see the [[https://rclone.org/docs/#configuration-encryption][documentation]] for details and [[Decrypting the repository passphrase with GPG][a later section]] for an example way to set it up.
+
+Then we just need to use the =rclone= protocol in the path of our *Restic* repository (instead of =sftp= as in the previous section) and everything works the same.
+
+Creating the new repository:
+
+#+begin_src bash
+  export RESTIC_REPOSITORY="rclone:dropbox:backups/restic_repo"
+  restic init
+#+end_src
+
+The backups repository will appear in our Dropbox in the =backups/restic_repo/= folder.
+
+We can update the backups script with the new repository path:
+
+#+begin_src sh
+  #!/bin/sh
+
+  export RESTIC_REPOSITORY="rclone:dropbox:backups/restic_repo"
+  export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
+
+  restic backup --exclude .cache $HOME
+
+  echo
+
+  restic forget                       \
+      --verbose                       \
+      --prune                         \
+      --keep-last     5               \
+      --keep-daily    7               \
+      --keep-weekly   4               \
+      --keep-monthly  6               \
+#+end_src
+
+And create some snapshots
+
+#+begin_src bash
+  ./backup.sh
+  ./backup.sh
+  restic snapshots
+  restic check
+#+end_src
+
 * Automating backups
 Now we want to schedule the backups to run automatically.
 For scheduling them we use =cron=:
@@ -356,7 +435,7 @@ More realistic timing (every 2 hours):
 * Decrypting the repository passphrase with GPG
 If we want automated backups but do not want to store the repository passphrase in plaintext we need some process to keep it in memory and make it available to the =cron= job.
 There are many tools for managing secrets such as =gnome-keyring=; note that not all of them will be easy to use with =cron= because the =cron= job does not share our environment.
-One possible solution is store the passphrase in a file encrypted with [[https://gnupg.org/][GnuPG]].
+One possible solution is store the passphrase in a file encrypted with [[https://gnupg.org/][GnuPG]], a standard tool for encryption on GNU systems.
 Conveniently, =keychain= can start the GPG agent for us, just as it does the SSH agent.
 ** GPG
 *gpg* is a standard tool for encryption and digital signatures.
@@ -450,6 +529,23 @@ Now instead of writing the passphrase in the backups script, we use the =RESTIC_
       --keep-weekly   4               \
       --keep-monthly  6               \
 #+end_src
+** Encrypting the *Rclone* configuration
+
+As noted earlier, the *Rclone* configuration file contains access tokens (passwords) to the cloud services for which we use *Rclone*, ie Dropbox in our example.
+Encrypting it is easy: run =rclone config= and select =s) Set configuration password=.
+We can then use the same strategy for the *Rclone* password as for the *Restic* repository password: store it in a file encrypted with *gpg*, and export the =RCLONE_PASSSWORD_COMMAND= environment variable.
+#+begin_src bash
+  echo -n 'passphrase: '; echo -E "$(read -s -r p; echo -E "$p")" | gpg -a -e -r jerome@backups --output rclone_config.asc
+  chmod 600 rclone_config.asc
+#+end_src
+(Enter the password we chose for *Rclone* config at the prompt.)
+Then edit our script to add:
+#+begin_src sh
+export RCLONE_PASSWORD_COMMAND="gpg --use-agent --quiet --batch -d $HOME/rclone_config.asc"
+#+end_src
+
+See also the *Rclone* [[https://rclone.org/docs/#configuration-encryption][documentation]].
+
 * Conclusion
 
 *Important:* anything we need to access and decrypt the backups repository must be backed up separately!
