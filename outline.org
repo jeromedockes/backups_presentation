@@ -191,6 +191,18 @@ Try it:
 #+begin_src bash
   ./backup.sh
 #+end_src
+** Removing stale locks
+Sometimes it can happen that a stale lock prevents using the repository: *Restic* thinks that the repository is currently being used by a process that does not exist anymore.
+The error message looks like:
+
+#+begin_example
+unable to create lock in backend: repository is already locked by PID <SOME PID> on <HOSTNAME> by <USER>
+#+end_example
+
+Once we have checked that there is actually no such process, and that the repository is indeed not being used, we can remove the lock with =restic unlock=:
+#+begin_src sh
+restic unlock
+#+end_src
 * Remote repositories
 *Restic* allows us to create and use repositories on remote hosts.
 It supports a wide variety of protocols so we can do our backups on any machine we can connect to with SSH, but also [[https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html][many cloud storage providers]].
@@ -714,6 +726,11 @@ Extract a full archive to the current working directory (must be empty):
   borg extract jerome@backupshost:backups/borg_repo::pi2-2022-04-06T17:02:29
   ls ./home
   cd -
+#+end_src
+** Breaking stale locks
+As for *Restic*, if a stale lock prevents using the repository, once we are sure the repository is actually not being used we can tell *Borg* to remove the lock:
+#+begin_src bash
+borg break-lock
 #+end_src
 ** Starting with version =1.2=: =borg compact=
 This applies to *Borg* more recent than =1.2= ([[https://github.com/borgbackup/borg/blob/1.2.0rc1/docs/changes.rst#version-120a2-and-earlier-2019-02-24][release notes]]), which as of [2022-04-06 Wed]  is not yet in the Ubuntu official packages (meaning that unless you add the Borg ppa, =sudo apt install borgbackup= will install version =1.1.15=).
