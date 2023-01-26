@@ -48,6 +48,9 @@ Old snapshots can be removed (according to a sensible strategy) to keep the repo
 #+end_src
 Or see the [[https://restic.readthedocs.io/en/stable/020_installation.html][Installation page]].
 ** Create repository
+:PROPERTIES:
+:ID:       35825d6b-cd65-412c-878d-e2ad6f33420e
+:END:
 Imagine we want to do our backups on an external drive mounted on =/mnt/usb_drive=.
 #+begin_src bash
   restic -r /mnt/usb_drive/backups/restic_repo init
@@ -59,7 +62,7 @@ Imagine we want to do our backups on an external drive mounted on =/mnt/usb_driv
 ** Create a snapshot
 Now we will add a snapshot (a backup, a copy of all the files as they are now) of our home directory to the repository.
 #+begin_src bash
-  restic -r /mnt/usb_drive/backups/restic_repo backup $HOME
+  restic -r /mnt/usb_drive/backups/restic_repo backup "$HOME"
 #+end_src
 ** Create a backup script; add snapshots; list snapshots in a repository
 Typing the repository and passphrase every time is annoying (and won't be possible for automated backups) so we'll put them in environment variables.
@@ -91,10 +94,10 @@ We can filter or group them according to the host, tags etc.
 
 #+begin_src bash
   . ./backup.sh
-  restic backup $HOME
-  restic backup --exclude .cache $HOME
+  restic backup "$HOME"
+  restic backup --exclude .cache "$HOME"
   restic snapshots
-  restic backup --exclude .cache --tag coffee $HOME
+  restic backup --exclude .cache --tag coffee "$HOME"
   restic snapshots
 #+end_src
 
@@ -105,7 +108,7 @@ We can add the snapshot creation to =~/backup.sh=:
   export RESTIC_REPOSITORY='/mnt/usb_drive/backups/restic_repo'
   export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
 
-  restic backup --verbose --exclude .cache $HOME
+  restic backup --verbose --exclude .cache "$HOME"
 #+end_src
 We can try it with
 #+begin_src bash
@@ -175,7 +178,7 @@ Edit =~/backup.sh=:
   export RESTIC_REPOSITORY='/mnt/usb_drive/backups/restic_repo'
   export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
 
-  restic backup --exclude .cache $HOME
+  restic backup --exclude .cache "$HOME"
 
   echo
 
@@ -247,7 +250,7 @@ How this is done will depend on how it is managed, for example we may need to se
 If they have allowed password access, which is the case for Compute Canada, we can copy it ourselves.
 For example if the server is called =backupshost=, our key is =id_rsa.pub= (it will always end with =.pub=) and our user is =jerome= we run (from the local machine):
 #+begin_src bash
-  ssh-copy-id $HOME/.ssh/id_rsa.pub jerome@backupshost
+  ssh-copy-id "$HOME/.ssh/id_rsa.pub" jerome@backupshost
 #+end_src
 
 Or we can connect to the server and manually edit =~/.ssh/authorized_keys= to copy the content of =~/.ssh/id_rsa.pub= in it (on a separate line).
@@ -322,7 +325,7 @@ Edit =$HOME/backup.sh=
   export RESTIC_REPOSITORY='sftp:jerome@backupshost:backups/restic_repo'
   export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
 
-  restic backup --exclude .cache $HOME
+  restic backup --exclude .cache "$HOME"
 
   echo
 
@@ -405,7 +408,7 @@ We can update the backups script with the new repository path:
   export RESTIC_REPOSITORY="rclone:dropbox:backups/restic_repo"
   export RESTIC_PASSWORD='3"b~4)"%@`fk?7q$&6cm-:kb&hrd~$`:'
 
-  restic backup --exclude .cache $HOME
+  restic backup --exclude .cache "$HOME"
 
   echo
 
@@ -435,13 +438,13 @@ For scheduling them we use =cron=:
 #+end_src
 add entry:
 #+begin_example
-  ,*/2 * * * * $HOME/backup.sh > $HOME/backup.log 2>&1
+  ,*/2 * * * * "$HOME/backup.sh" > "$HOME/backup.log" 2>&1
 #+end_example
 This will run a backup every 2 minutes! So we can check it works without waiting too long.
 
 More realistic timing (every 2 hours):
 #+begin_example
-  0 */2 * * * $HOME/backup.sh > $HOME/backup.log 2>&1
+  0 */2 * * * "$HOME/backup.sh" > "$HOME/backup.log" 2>&1
 #+end_example
 
 * Decrypting the repository passphrase with GPG
@@ -529,7 +532,7 @@ Now instead of writing the passphrase in the backups script, we use the =RESTIC_
   export RESTIC_REPOSITORY='sftp:jerome@backupshost:backups/restic_repo'
   export RESTIC_PASSWORD_COMMAND="gpg --use-agent --quiet --batch -d $HOME/restic_repo.asc"
 
-  restic backup --exclude .cache $HOME
+  restic backup --exclude .cache "$HOME"
 
   echo
 
