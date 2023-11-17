@@ -450,6 +450,8 @@ More realistic timing (every 2 hours):
 * Decrypting the repository passphrase with GPG
 If we want automated backups but do not want to store the repository passphrase in plaintext we need some process to keep it in memory and make it available to the =cron= job.
 There are many tools for managing secrets such as =gnome-keyring=; note that not all of them will be easy to use with =cron= because the =cron= job does not share our environment.
+[[https://www.passwordstore.org/][pass]] is a good option.
+
 One possible solution is store the passphrase in a file encrypted with [[https://gnupg.org/][GnuPG]], a standard tool for encryption on GNU systems.
 Conveniently, =keychain= can start the GPG agent for us, just as it does the SSH agent.
 ** GPG
@@ -520,6 +522,10 @@ We can check it worked by decrypting the file:
   gpg --quiet -d ./restic_repo.asc
 #+end_src
 
+*** password store
+A probably better alternative to creating the password files manually is to use the [[https://www.passwordstore.org/][pass]] command.
+It does something similar to what we did manually here -- create a folder in which each password is stored in a separate file which gets encrypted and decrypted with the gpg agent.
+But it is more convenient and it is a feature-complete password manager so we can use it to store all our passwords (that we enter on websites etc).
 ** Edit backups script
 Now instead of writing the passphrase in the backups script, we use the =RESTIC_PASSWORD_COMMAND= environment variable; and use *gpg* to decrypt the file we just created:
 =~/backup.sh=
@@ -736,7 +742,7 @@ As for *Restic*, if a stale lock prevents using the repository, once we are sure
 borg break-lock
 #+end_src
 ** Starting with version =1.2=: =borg compact=
-This applies to *Borg* more recent than =1.2= ([[https://github.com/borgbackup/borg/blob/1.2.0rc1/docs/changes.rst#version-120a2-and-earlier-2019-02-24][release notes]]), which as of [2022-04-06 Wed]  is not yet in the Ubuntu official packages (meaning that unless you add the Borg ppa, =sudo apt install borgbackup= will install version =1.1.15=).
+This applies to *Borg* more recent than =1.2= ([[https://github.com/borgbackup/borg/blob/1.2.0rc1/docs/changes.rst#version-120a2-and-earlier-2019-02-24][release notes]]).
 
 Just as =restic forget= (without the =--prune= option) removes snapshots but does not actually free disk space (only =restic forget --prune= or =restic prune= free space), =borg prune= removes archives but does not remove the chunks they reference and thus does not free space.
 To free disk space we need to run =borg compact=.
